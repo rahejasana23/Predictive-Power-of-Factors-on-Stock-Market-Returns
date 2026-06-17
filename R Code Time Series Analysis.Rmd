@@ -1,0 +1,496 @@
+---
+title: "The Predictive Power of Unemployment, Inflation, and Interest Rates on Stock Market Returns"
+author: "Sana Raheja"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE)
+```
+
+```{r, echo=FALSE}
+library(quantmod)
+library(tidyverse)
+library(tseries)
+library(forecast)
+library(vars)
+library(urca)
+library(lmtest)
+library(zoo)
+library(ggplot2)
+library(gridExtra)
+library(corrplot)
+library(TSstudio)
+```
+
+# Introduction
+
+Financial markets are fundamentally linked to the macroeconomic environment in which firms operate. Equity prices respond not only to firm-level earnings expectations but also to broad economic conditions that affect discount rates, investment opportunities, consumer demand, and overall business cycles. This relationship has long been a central topic in financial economics because understanding whether macroeconomic fundamentals contain predictive information about stock returns has direct implications for asset pricing, portfolio allocation, and monetary policy transmission.
+
+This project investigates the relationship between major macroeconomic indicators and stock market returns using multivariate time series econometrics. Specifically, the analysis focuses on three macroeconomic variables: interest rates, inflation, and unemployment, and their relationship with stock market performance measured by the S&P 500. The objective is to determine whether these macroeconomic variables contain statistically significant predictive information for future stock returns.
+
+The methodology begins with stationarity testing using the Augmented Dickey-Fuller test to determine the order of integration of each variable. Since the macroeconomic variables are non-stationary, cointegration testing using the Johansen procedure is employed to identify whether long-run equilibrium relationships exist among the variables. The trace test reveals two cointegrating relationships, indicating that stock returns, inflation, interest rates, and unemployment share long-run dynamics. Accordingly, a Vector Error Correction Model (VECM) is estimated, which captures both long-run equilibrium adjustment and short-run dynamics. Granger causality tests are then conducted within this framework to evaluate whether lagged macroeconomic information improves forecasts of stock returns. Additional analyses including impulse response functions and forecast error variance decomposition provide deeper insight into the magnitude and persistence of shocks.
+
+This project seeks to answer the broader question of market efficiency by testing whether macroeconomic conditions influence equity market behavior beyond what past stock returns alone can explain.
+
+# Literature Review and Historical Context
+
+The relationship between macroeconomic conditions and stock market behavior has been extensively studied in financial economics. Classical valuation theory suggests that stock prices equal the discounted present value of expected future cash flows. Under this framework, macroeconomic variables influence equity values through two main channels: expected future earnings and discount rates.
+
+Interest rates directly affect discount rates used in equity valuation. Higher rates reduce present values and increase borrowing costs, often lowering stock prices. This mechanism became highly visible during the Federal Reserve tightening cycles of the early 1980s, the 2004–2006 rate hikes, and the post-pandemic tightening period beginning in 2022.
+
+Inflation affects stock prices through cost pressures, uncertainty, and monetary policy expectations. The inflation crisis of the 1970s remains one of the strongest examples of inflation-driven financial instability, where high inflation coincided with poor real stock market performance.
+
+Unemployment serves as a coincident and lagging economic indicator. Rising unemployment often signals weakening consumer demand, falling corporate revenues, and recessionary pressures. During the Great Recession of 2008–2009, the unemployment rate increased sharply while equity markets experienced substantial declines.
+
+From a theoretical perspective, the Efficient Market Hypothesis argues that all publicly available macroeconomic information should already be incorporated into stock prices. Under strong market efficiency, lagged macroeconomic variables should not lead to Granger-caused stock returns. However, behavioral finance and market frictions suggest information may diffuse gradually through participants, allowing lagged predictive relationships.
+
+# Time Series Theory
+
+Time series econometrics differs from standard regression because temporal ordering creates dependence across observations. A time series is a stochastic process indexed through time, and its statistical properties may evolve dynamically.
+
+### Stationarity
+
+A fundamental assumption in most time series models is stationarity. Weak stationarity requires constant first and second moments over time. Specifically, the expected value, variance, and covariance structure must remain invariant to time shifts. In practical terms, a stationary series fluctuates around a constant mean with constant spread, and shocks dissipate over time.
+
+### Unit Roots and Differencing
+
+Nonstationary processes often contain unit roots, implying shocks have permanent effects. This creates persistent stochastic trends and invalidates many standard inferential procedures. Regressions involving nonstationary variables can produce spurious results, which are characterized by high R-squared values and statistically significant coefficients despite no meaningful economic relationship.
+
+Differencing transforms integrated processes into stationary ones by subtracting each observation from the previous one, thereby removing stochastic trends. A process requiring one difference to achieve stationarity is described as integrated of order one.
+
+### Autocorrelation
+
+Autocorrelation measures dependence across observations at different time points. The autocorrelation function captures total correlation at each lag, while the partial autocorrelation function isolates direct lag effects by removing correlations at intermediate lags. These functions help identify the appropriate lag structure for modeling.
+
+### Cointegration
+
+Cointegration arises when nonstationary variables share a stable long-run equilibrium relationship. Even though each variable individually drifts over time, a linear combination of them is stationary. This means the variables do not drift arbitrarily far apart; they remain tethered together in the long run, with deviations from equilibrium eventually correcting.
+
+### Vector Error Correction Model
+
+When cointegration exists, a Vector Error Correction Model is preferred over standard VAR models. The VECM separates long-run equilibrium dynamics from short-run adjustments. It includes an error correction term that captures the speed at which variables return to equilibrium after a shock. Variables with large adjustment coefficients respond quickly to restore balance, while variables with small coefficients may be weakly exogenous, meaning they do not adjust to disequilibrium.
+
+### Granger Causality
+
+Granger causality evaluates predictive usefulness rather than true structural causation. If past values of one variable improve forecasts of another, conditional on the target variable's own history, then Granger causality is present. In a VECM framework, this is tested by examining whether the coefficients on lagged values of a candidate predictor are jointly statistically significant. A significant result indicates the variable contains predictive information not already captured by the target's own past or the long-run equilibrium relationship.
+
+# Data Collection
+
+The dataset consists of monthly observations beginning January 2000. Monthly frequency aligns naturally with macroeconomic releases and reduces excessive noise present in daily data.
+
+The following variables are used:
+
+* S&P 500 index level
+* Federal Funds Rate
+* Consumer Price Index
+* Unemployment Rate
+
+```{r data-download, include=FALSE}
+getSymbols("SP500", src="FRED")
+getSymbols("FEDFUNDS", src="FRED")
+getSymbols("CPIAUCSL", src="FRED")
+getSymbols("UNRATE", src="FRED")
+```
+
+# Data Transformation
+
+Raw price levels are typically nonstationary. Financial returns are computed as log differences because they are additive over time and stabilize variance.
+
+```{r preprocessing}
+sp500_returns <- diff(log(SP500))*100
+inflation <- diff(log(CPIAUCSL))*100
+interest <- FEDFUNDS
+unemployment <- UNRATE
+
+data <- merge(sp500_returns, inflation, interest, unemployment)
+data <- na.omit(data)
+
+colnames(data) <- c("Stock_Returns","Inflation","Interest_Rate","Unemployment")
+```
+
+# Exploratory Data Analysis
+
+Visual exploration provides preliminary evidence regarding volatility, persistence, and possible structural breaks.
+
+## Time Series Plot
+
+```{r time-series-plots, fig.height=10, echo=FALSE}
+
+p1 <- autoplot.zoo(data[,1]) +
+  ggtitle("S&P 500 Log Returns") +
+  theme_minimal() +
+  geom_line(color = "steelblue")
+
+p2 <- autoplot.zoo(data[,2]) +
+  ggtitle("Monthly Inflation") +
+  theme_minimal() +
+  geom_line(color = "darkorange")
+
+p3 <- autoplot.zoo(data[,3]) +
+  ggtitle("Federal Funds Rate") +
+  theme_minimal() +
+  geom_line(color = "forestgreen")
+
+p4 <- autoplot.zoo(data[,4]) +
+  ggtitle("Unemployment Rate") +
+  theme_minimal() +
+  geom_line(color = "purple")
+
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+The unemployment rate is mostly stable with a massive spike for COVID era. For both S&P log returns and monthly inflation, there is a massive drop for COVID and then a large spike for the recovery period in 2021-2022. The graph then stabilizes. It is the same pattern for the federal funds rate.
+
+## Distribution Analysis
+
+Understanding the distributional characteristics of each variable helps identify skewness, kurtosis, and tail behavior.
+
+```{r histograms, echo=FALSE}
+library(ggplot2)
+library(patchwork)
+
+p1 <- ggplot(as.data.frame(data), aes(Stock_Returns)) +
+  geom_histogram(bins = 40, fill = "steelblue", color = "white") +
+  ggtitle("Distribution of Stock Returns") +
+  theme_minimal()
+
+p2 <- ggplot(as.data.frame(data), aes(Inflation)) +
+  geom_histogram(bins = 40, fill = "darkorange", color = "white") +
+  ggtitle("Distribution of Inflation") +
+  theme_minimal()
+
+p1 | p2
+```
+
+The inflation graph is unimodal and relatively normal,but contains outliers. The distribution of stock returns is bimodal and also contains outliers.
+
+## Correlation Matrix
+
+Correlation analysis provides initial insight into linear dependence.
+
+```{r correlation}
+cor_matrix <- cor(data)
+corrplot(cor_matrix, method="circle")
+```
+
+There are noticeable negative correlations between unemployment ans stock returns and unemployment and interest rate that could warrent further investigation.
+
+## Rolling Volatility
+
+Rolling volatility helps identify periods of elevated market uncertainty.
+
+```{r rolling-volatility, echo=FALSE}
+library(zoo)
+
+rolling_sd <- rollapply(data$Stock_Returns, width = 12, FUN = sd, fill = NA, align = "right")
+
+par(
+  mar = c(4,4,3,2),
+  cex.main = 1.4,
+  cex.lab = 1.1,
+  cex.axis = 0.9,
+  font.main = 2
+)
+
+plot(
+  rolling_sd,
+  type = "l",
+  col = "steelblue",
+  lwd = 2,
+  main = "12-Month Rolling Volatility (Stock Returns)",
+  xlab = "Time",
+  ylab = "Standard Deviation"
+)
+
+
+abline(h = mean(rolling_sd, na.rm = TRUE), col = "gray60", lty = 2)
+```
+
+On this graph, we can attest historical events to the volatility:
+
+2016–2017: Very calm market (post‑election stability, low VIX)
+
+2019:Rising trade war uncertainty (US‑China tensions)
+
+Feb 2021: Peak volatility — actually surprising, since 2021 was mostly a bull market. But this might capture:
+
+- Meme stock volatility (Gamestop Jan 2021)
+
+- COVID reopening uncertainty
+
+- Inflation fears beginning
+
+- Or perhaps this is inflation volatility 
+
+July 2022: Lower but still elevated — after aggressive Fed rate hikes began
+
+Dec 2023: Very calm — markets pricing in rate cuts, soft landing hopes
+
+# Stationarity Testing
+
+Formal stationarity testing is performed using the Augmented Dickey-Fuller test.
+
+```{r adf-tests, echo=FALSE}
+adf_stock <- adf.test(data$Stock_Returns)
+adf_inflation <- adf.test(data$Inflation)
+adf_interest <- adf.test(data$Interest_Rate)
+adf_unemployment <- adf.test(data$Unemployment)
+
+adf_stock
+adf_inflation
+adf_interest
+adf_unemployment
+```
+Stock Returns exhibits weak evidence of stationarity (p = 0.0647). While the null hypothesis of a unit root cannot be rejected at conventional significance levels, the p-value approaches the 10% threshold. This near-stationary behavior is theoretically expected for financial returns, which typically fluctuate around a mean of zero without persistent trends.
+
+Inflation, Interest Rate, and Unemployment are clearly non-stationary (all p-values > 0.35). These variables contain persistent trends or long-memory components. Shocks to these series do not decay over time, meaning their means and variances are not constant. This is economically intuitive: interest rates and unemployment can remain elevated or suppressed for extended periods, and inflation exhibits prolonged cycles.
+
+## Differencing
+
+```{r differencing}
+data$Inflation_diff <- diff(data$Inflation, differences = 1)
+data$Interest_Rate_diff <- diff(data$Interest_Rate, differences = 1)
+data$Unemployment_diff <- diff(data$Unemployment, differences = 1)
+
+data_stationary <- data.frame(
+  Stock_Returns = data$Stock_Returns,
+  Inflation = data$Inflation_diff,
+  Interest_Rate = data$Interest_Rate_diff,
+  Unemployment = data$Unemployment_diff
+)
+
+data_stationary <- na.omit(data_stationary)
+
+```
+
+Differencing transforms a non-stationary series from levels to period-to-period changes. For a series, the first difference is calculated as:
+$\Delta X_t = X_t - X_{t-1}$
+ 
+This removes unit roots by eliminating trends and stabilizing the mean.
+
+## ACF and PACF Analysis
+
+ACF and PACF plots reveal dependence structure.
+
+```{r acf-pacf-stock}
+acf(data_stationary$Stock_Returns, main = "ACF: Stock Returns")
+pacf(data_stationary$Stock_Returns, main = "PACF: Stock Returns")
+```
+
+```{r acf-pacf-inflation}
+acf(data_stationary$Inflation, main = "ACF: Inflation (Differenced)")
+pacf(data_stationary$Inflation, main = "PACF: Inflation (Differenced)")
+```
+
+This suggests that only the first lag of macroeconomic variables helps predict stock returns. Longer historical data (beyond 1 month) does not improve predictions which is consistent with efficient market hypothesis (only recent information matters).
+
+# Cointegration Analysis
+
+Macroeconomic variables often exhibit long-run equilibrium relationships. The Johansen procedure tests for cointegration rank using the original level variables (not differenced).
+
+```{r johansen-test, echo=FALSE}
+# Note: ca.jo requires K >= 2. We use K = 2 as the minimum
+
+data_matrix <- as.matrix(na.omit(data[, c("Stock_Returns", "Inflation", "Interest_Rate", "Unemployment")]))
+
+johansen <- ca.jo(data_matrix, type = "trace", ecdet = "const", K = 2)
+summary(johansen)
+```
+## Interpretation of Results
+
+### Stationarity
+
+The ADF tests show that stock returns are weakly stationary (p = 0.065), while inflation (p = 0.537), interest rates (p = 0.362), and unemployment (p = 0.376) are non-stationary. This means macroeconomic variables contain persistent trends, whereas returns fluctuate around zero.
+
+### Long-Run Equilibrium
+
+The Johansen trace test finds **2 cointegrating relationships** at the 5% level. The test statistic for r = 0 is 73.97 (critical value 53.12), and for r less than or equal to 1 is 35.61 (critical value 34.91), confirming two long-run equilibria linking stock returns to the macroeconomy.
+
+The first cointegrating vector shows that a 1% increase in inflation is associated with a 2.26% higher stock return in the long run. Interest rates have a small positive effect (+0.02), while unemployment has a weak negative effect (-0.03).
+
+### Adjustment Speeds
+
+Stock returns adjust fastest to restore equilibrium, correcting **58% of any deviation within one month** (loading = -0.578). Inflation corrects at 10%, unemployment at 17%, but interest rates show virtually no adjustment (loading = -0.003). This confirms the Federal Reserve sets rates exogenously, while equity markets bear the burden of adjusting to macroeconomic changes.
+
+### Answer to Research Question
+
+Cointegration exists, meaning stock returns and macroeconomic variables do not drift apart in the long run. Stock returns adjust quickly (58% per month) to restore equilibrium when deviations occur, while interest rates remain exogenous. This supports the view that macroeconomic conditions contain information relevant for predicting stock market behavior.
+
+For Next Steps,
+
+1. Estimate Vector Error Correction Model
+
+```{r vecm-estimation, echo=FALSE}
+# Load required library
+library(tsDyn)
+
+# Prepare data as data frame
+data_ts <- as.data.frame(data_matrix)
+colnames(data_ts) <- c("Stock_Returns", "Inflation", "Interest_Rate", "Unemployment")
+
+# Estimate VECM with 2 cointegrating vectors (r = 2)
+vecm_model <- VECM(data_ts, lag = 2, r = 2, include = "const", estim = "ML")
+
+# View results
+summary(vecm_model)
+
+```
+2. Granger Causality Tests
+```{r, echo=FALSE}
+
+# Method 1: Use VAR on stationary data (simplest)
+data_stationary <- data.frame(
+  Stock_Returns = as.numeric(data$Stock_Returns),
+  Inflation = as.numeric(diff(data$Inflation)),
+  Interest_Rate = as.numeric(diff(data$Interest_Rate)),
+  Unemployment = as.numeric(diff(data$Unemployment))
+)
+data_stationary <- na.omit(data_stationary)
+
+# Estimate VAR
+var_temp <- VAR(data_stationary, p = 2, type = "const")
+
+# Granger causality tests
+cat("\n========== GRANGER CAUSALITY RESULTS ==========\n\n")
+
+gc_rates <- causality(var_temp, cause = "Interest_Rate")
+cat("Interest Rate / Stock Returns:")
+print(gc_rates$Granger)
+
+gc_inf <- causality(var_temp, cause = "Inflation")  
+cat("\nInflation / Stock Returns:")
+print(gc_inf$Granger)
+
+gc_unemp <- causality(var_temp, cause = "Unemployment")
+cat("\nUnemployment / Stock Returns:")
+print(gc_unemp$Granger)
+```
+3. Impulse Response Plot and FEVD Plot
+```{r, echo=FALSE}
+
+irf_unemp <- irf(vecm_model, impulse = "Unemployment", 
+                 response = "Stock_Returns", n.ahead = 12, boot = FALSE)
+
+irf_data <- data.frame(
+  Month = 0:12,
+  Response = as.numeric(irf_unemp$irf$Unemployment)
+)
+
+p1 <- ggplot(irf_data, aes(x = Month, y = Response)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_line(color = "#2E5A88", size = 1.2) +
+  geom_point(color = "#2E5A88", size = 2) +
+  labs(
+    title = "Response of Stock Returns to Unemployment Shock",
+    subtitle = "One standard deviation increase in unemployment",
+    x = "Months After Shock",
+    y = "Change in Stock Returns (%)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10, color = "gray40"),
+    axis.title = element_text(size = 11),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(fill = NA, color = "gray80", linewidth = 0.5)
+  )
+```
+
+```{r,fig.height = 10, fig.width = 10, echo=FALSE}
+fevd_results <- fevd(vecm_model, n.ahead = 24)
+fevd_data <- data.frame(
+  Month = rep(1:24, 4),
+  Variable = rep(c("Stock Returns", "Inflation", "Interest Rate", "Unemployment"), each = 24),
+  Contribution = c(
+    fevd_results$Stock_Returns[,1],
+    fevd_results$Stock_Returns[,2],
+    fevd_results$Stock_Returns[,3],
+    fevd_results$Stock_Returns[,4]
+  )
+)
+
+fevd_colors <- c("Stock Returns" = "#2E5A88", "Inflation" = "#E68A2E", 
+                 "Interest Rate" = "#2E8B57", "Unemployment" = "#8B5A8B")
+
+p2 <- ggplot(fevd_data, aes(x = Month, y = Contribution, fill = Variable)) +
+  geom_area(alpha = 0.8) +
+  scale_fill_manual(values = fevd_colors) +
+  labs(
+    title = "What Explains Stock Return Volatility?",
+    subtitle = "Forecast Error Variance Decomposition",
+    x = "Months Ahead",
+    y = "Proportion of Variance Explained (%)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 10, color = "gray40"),
+    axis.title = element_text(size = 11),
+    legend.position = "bottom",
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 9),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(fill = NA, color = "gray80", linewidth = 0.5)
+  )
+
+p1 / p2 + 
+  plot_annotation(
+    title = "Macroeconomic Effects on Stock Returns",
+    theme = theme(
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5, margin = margin(b = 15))
+    )
+  )
+```
+
+
+## Results
+
+The Granger causality tests revealed that only unemployment has statistically significant predictive power for stock returns. The test for unemployment produced an F-statistic of 2.6353 with a p-value of 0.0171, allowing rejection of the null hypothesis that unemployment does not Granger-cause stock returns at the 5 percent significance level. In contrast, the interest rate test yielded an F-statistic of 1.4917 (p = 0.1815), and the inflation test produced an F-statistic of 0.6076 (p = 0.7242), indicating neither variable Granger-causes stock returns. These findings suggest that among the three macroeconomic variables examined, labor market conditions contain unique predictive information not already reflected in past stock returns.
+
+Supporting evidence from the Johansen cointegration test identified two long-run equilibrium relationships among the four variables, confirming that stock returns, inflation, interest rates, and unemployment are tethered together over longer horizons. The loading matrix revealed that stock returns adjust most strongly to restore equilibrium, correcting approximately 58 percent of any deviation within one month. The interest rate, however, showed virtually no adjustment, consistent with the Federal Reserve setting policy exogenously rather than responding automatically to stock market disequilibria. The impulse response function for an unemployment shock shows that a one-standard-deviation increase in unemployment leads to a persistent decline in stock returns lasting several months, consistent with the Granger causality finding. Forecast error variance decomposition further confirms that unemployment explains a meaningful portion of stock return forecast variance at medium-term horizons, while inflation and interest rates account for considerably smaller shares.
+
+## Economic Interpretation
+
+The finding that unemployment Granger-causes stock returns is economically intuitive. Rising unemployment signals weakening consumer demand, which lowers corporate revenues and profits. It also leads markets to anticipate recessionary conditions and reduced future earnings, causing downward adjustments to equity valuations. Additionally, higher unemployment increases default risk, affecting financial sector stability. The significant lagged relationship suggests that equity markets do not fully absorb labor market information instantaneously, consistent with models of gradual information diffusion rather than strong-form market efficiency.
+
+The lack of Granger causality from inflation and interest rates is also economically interpretable. Financial markets likely price in expected inflation quickly and efficiently, leaving no lagged predictive relationship to detect at monthly frequency. For interest rates, the Federal Reserve follows a transparent, predictable policy rule. If markets correctly anticipate Fed actions, actual rate changes contain little new information at monthly horizons. The weak exogeneity of interest rates observed in the loading matrix supports this interpretation, as the Fed appears to target inflation and employment rather than reacting systematically to stock market disequilibria.
+
+These findings provide partial support for semi-strong market efficiency. Inflation and interest rate information appears fully incorporated into stock prices with no detectable lag. However, unemployment information is not fully absorbed immediately, suggesting some degree of inefficiency or, more likely, that unemployment contains complex, multi-dimensional signals about the economy that take time to fully interpret.
+
+## Limitations
+
+This analysis is subject to several important limitations. First, the VAR and VECM models assume linear relationships, but financial markets are known to exhibit nonlinear dynamics and regime switching that linear models fail to capture. Second, the use of monthly data may mask higher-frequency relationships, and both unemployment and inflation are released with lags and subject to revision. Third, omitted variable bias is a concern, as stock returns are influenced by many factors not included in this model, including corporate earnings, geopolitical events, investor sentiment, global conditions, and fiscal policy. Fourth, the sample period includes major structural breaks such as the COVID-19 pandemic and the post-2022 inflation surge, which may invalidate the assumption of constant parameters. Fifth, Granger causality is predictive rather than structural; finding that unemployment predicts stock returns does not necessarily prove that unemployment causes stock returns, as a third omitted variable such as oil price shocks could drive both. Finally, the cointegration tests have limited power with approximately 280 monthly observations and four variables.
+
+## Conclusion
+
+Among the three macroeconomic variables examined, only unemployment Granger-causes stock returns at the 5 percent significance level. Inflation and interest rates show no significant predictive power. These results suggest that labor market conditions contain information relevant for stock market returns that is not already reflected in past prices, while inflation and monetary policy information is incorporated without detectable monthly lag. The presence of two cointegrating relationships confirms that all four variables share long-run equilibrium dynamics, with stock returns bearing the primary burden of adjustment. Future research could extend this analysis by incorporating nonlinear models, additional control variables, or higher-frequency data.
+
+# References
+
+Hamilton, J.D. (1994). Time Series Analysis.
+
+Lutkepohl, H. (2005). New Introduction to Multiple Time Series Analysis.
+
+Tsay, R.S. (2010). Analysis of Financial Time Series.
+
+Federal Reserve Economic Data (FRED).
+
+Packages: 
+
+- library(quantmod)
+- library(tidyverse)
+- library(tseries)
+- library(forecast)
+- library(vars)
+- library(urca)
+- library(lmtest)
+- library(zoo)
+- library(ggplot2)
+- library(gridExtra)
+- library(corrplot)
+- library(TSstudio)
